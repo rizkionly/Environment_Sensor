@@ -1,70 +1,16 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <PubSubClient.h>
-#define ARDUINOJSON_USE_LONG_LONG 1
-#include <ArduinoJson.h>
+#include <Arduino_JSON.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "icon.h"
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-//#include "DHT.h"
-//#define DHTPIN D1
-//#define DHTTYPE DHT11
-
-//DHT dht(DHTPIN, DHTTYPE);
-//inisialisasi OLED
-#define SCREEN_WIDTH 128 
-#define SCREEN_HEIGHT 64 
-#define OLED_RESET    -1 
-
-// Timing-related variables
-#define tahun timeClient.getYear()
-#define bulan timeClient.getMonth()
-#define tanggal timeClient.getDate()
-//#define hari daysOfTheWeek[timeClient.getDay()]
-#define jam timeClient.getHours()
-#define menit timeClient.getMinutes()
-#define detik timeClient.getSeconds()
-// Timezone rules for GMT+7 (Jakarta, Bangkok, Hanoi)
-const long utcOffsetInSeconds = 25200;
-//char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "asia.pool.ntp.org", utcOffsetInSeconds);
-WiFiClient espClient;
-WiFiClient httpClient;
-PubSubClient client(espClient);
-HTTPClient http;
-
-const char* guid                  = "18b91fec-957b-464e-9f3e-f4f716cf2d67";
-const char* mqttHost              = "iwkrmq.pptik.id"; // Deklarasi untuk link yang akan dituju
-const char* mqttUserName          = "/trainerkit:trainerkit"; // Deklarasi untuk nama UserName DI RMQ /survey:survey
-const char* mqttPassword          = "12345678"; // Deklarasi untuk Passwordnya di RMQ $surv3yy!
-const char* mqttQueue             = "Environment"; // Deklarasi untuk nama Queue di RMQ
-const char* CL = guid;
-
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
- 
-const char* ssid = "TEKIDO";      
-const char* password = "iotworkshop2021"; 
-String apiKey = "cbd4f560b4b5c040e76e653cda335ce9";       //openweather apikey
-String city = "Bandung";              //City name
-String units = "metric";              //or standart, imperial
-String payload; 
-int wifi_stat = 0;
-int wifiIcon = LOW; 
-
-
-const char* weather_0_main;
-const char* weather_0_icon;
-float main_temp = 0;
-int main_humidity = 0;
-String weatherr;
-String Icon;
-unsigned long previousMillis_1 = 0;  
-const long interval_1 = 10000; //interval time HTTP req 
+#include <DHT.h>
+#include "icon.h"
+#include "config.h"
 
 void setup () {
   Serial.begin(115200);
@@ -72,11 +18,10 @@ void setup () {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); 
   }
-  delay(2000); // Pause for 2 seconds
+  delay(2000);
   display.clearDisplay();
   timeClient.begin();
-//  dht.begin();
-  // just intro
+  dht.begin();
   display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(24,20);  display.println(F("Welcome"));
@@ -86,7 +31,8 @@ void setup () {
   delay(1000); 
   display.clearDisplay();
   WiFi.mode(WIFI_STA); 
-  ConnectWIFI();
+  setup_wifi();
+  printMACAddress();
   client.setServer(mqttHost, 1883);
   delay(1000);
 }
@@ -96,7 +42,7 @@ void loop() {
     }
    client.loop();
    float dataSuhu;
-//   dataSuhu = dht.readTemperature();
+   dataSuhu = dht.readTemperature();
    Serial.println(dataSuhu);
    String convertDataSuhu = String(dataSuhu);
    String dataRMQ = String(String(guid) + "#" + dataSuhu );
@@ -107,113 +53,52 @@ void loop() {
    client.publish(mqttQueue,dataToMQTT);
    delay(1000);
     
-  unsigned long currentMillis_1 = millis();
-  DisplayUpdate();
-    
+   unsigned long currentMillis_1 = millis();
+   DisplayUpdate();
+   
   if (currentMillis_1 - previousMillis_1 >= interval_1) {
     previousMillis_1 = currentMillis_1; 
     req_data();
   } 
 }
 
-
 void req_data(){
-  if (WiFi.status() == WL_CONNECTED) { //Check WiFi connection status
-      String address;
-      //http://api.openweathermap.org/data/2.5/weather?q=****,ID&appid=******&units=metric
-      address ="http://api.openweathermap.org/data/2.5/weather?q=";
-      address += city;
-      address += "&appid="; 
-      address += apiKey ;
-      address += "&units=";
-      address += units;  
-      http.begin(httpClient,address);  //Specify request destination
-      int httpCode = http.GET();//Send the request
-       
-      if (httpCode > 0) { //Check the returning code               
-          payload = http.getString();   //Get the request response payload
-          Serial.println(payload);      //Print the response payload
-      }
-     
-      http.end();   //Close connection
-      const size_t capacity = JSON_ARRAY_SIZE(1) + 2*JSON_OBJECT_SIZE(1) + 2*JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(4) + JSON_OBJECT_SIZE(8) + JSON_OBJECT_SIZE(14) + 290;
-       
-      DynamicJsonDocument doc(capacity);
-      
-      // Deserialize the JSON document
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      // Test if parsing succeeds.
-      if (error) {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+      jsonBuffer = httpGETRequest(serverPath.c_str());
+      JSONVar myObject = JSON.parse(jsonBuffer);
+  
+      if (JSON.typeof(myObject) == "undefined") {
+        Serial.println("Parsing input failed!");
         return;
       }
-      
-     JsonObject weather_0 = doc["weather"][0];
-     weather_0_main = weather_0["main"];
-     weather_0_icon = weather_0["icon"];
-     Icon = String(weather_0_icon);
-     weatherr =String(weather_0_main);
-     
-     JsonObject main = doc["main"];
-     main_temp = main["temp"];
-     main_humidity = main["humidity"];  
-     
-     //Print Data 
-     Serial.println("Current Weather");
-     Serial.print(weather_0_main);Serial.print(", Temp: ");
-     Serial.print(main_temp);Serial.print(", Hum:");
-     Serial.print(main_humidity); Serial.println();
-//     Serial.println(hari);
-//      Serial.print(", ");
-      Serial.print(tanggal);
-      Serial.print("/");
-      Serial.print(bulan);
-      Serial.print("/");
-      Serial.print(tahun);
-      Serial.print("\t");
-      Serial.print(jam);
-      Serial.print(":");
-      Serial.print(menit);
-      Serial.print(":");
-      Serial.println(detik);
-      delay(1000);
+    
+      main_temp = JSON.stringify(myObject["main"]["temp"]);
+      String weather1 = JSON.stringify(myObject["weather"][0]["main"]);
+      weather = weather1.substring(1, weather1.length()-1);
+      String Icon1 = JSON.stringify(myObject["weather"][0]["icon"]);
+      Icon = Icon1.substring(1, Icon1.length()-1);
     }else{
-         ConnectWIFI();
+      setup_wifi();
     }
 } 
-
 
 void DisplayUpdate(){
   int x_cursor;
   int TextSize;
   char buff[20];
   display.clearDisplay(); 
-  checkWIFI();
-   if (wifi_stat == 0){
-      // if the LED is off turn it on and vice-versa:
-      //Serial.println(F(" Wifi Not Connected"));
-      display.setTextSize(1);
-      display.setCursor(2,24); display.print("Connecting ...");
-      if (wifiIcon == LOW) {
-      display.drawBitmap(108, 2, wifi_icon, 16, 16, WHITE);
-      wifiIcon = HIGH;
-      } else {
-      display.drawBitmap(108, 2, wifi_icon, 16, 16, BLACK);
-      wifiIcon = LOW;
-      }
+   if (WiFi.status() != WL_CONNECTED){
+      setup_wifi();
     }else{
       float dataAnalog;
-//      dataAnalog = dht.readTemperature();
+      dataAnalog = dht.readTemperature();
       timeClient.update();
       display.drawBitmap(106, 2, wifi_icon, 16, 16, WHITE);
-      //display variable
       display.setTextColor(WHITE);
       display.setTextSize(1);
       //display.setCursor(80,40);display.print(humNow); display.println(" %");
       display.setCursor(0,56);display.println(city);
-      display.setCursor(64,30);display.println(weatherr);
+      display.setCursor(64,30);display.println(weather);
       String cd = String(tanggal)+"/"+ String(bulan)+"/"+String(tahun)+" "+String(jam)+":"+String(menit);
       display.setCursor(0,2);display.println(cd);
       display.setTextSize(1);
@@ -225,6 +110,7 @@ void DisplayUpdate(){
     display.display();
     delay(600);
 }
+
 void DisplayBitmap(){
   if (Icon=="01d"){
     display.drawBitmap(0, 0, d01, 64, 64, WHITE);
@@ -264,36 +150,6 @@ void DisplayBitmap(){
   } 
 }
 
-void checkWIFI(){
-  if(WiFi.status() == WL_CONNECTED){
-    wifi_stat=1;
-  }else{
-    wifi_stat=0;
-  }
-}
-
-void ConnectWIFI(){
-  if(WiFi.status() != WL_CONNECTED){
-    Serial.print("Attempting to connect to SSID: ");
-    Serial.println(ssid);
-    WiFi.begin(ssid, password);
-    int i=0;
-    while(WiFi.status() != WL_CONNECTED){ 
-      Serial.print(".");
-      delay(1000); 
-      ++i;
-      if (i==30){
-        i=0;
-        Serial.println("\n Failed to Connect.");
-        break;
-        }    
-    } 
-    if (WiFi.status() == WL_CONNECTED){
-      Serial.println("\nConnected.");
-      wifi_stat=1;
-    }
-  }
-}
 void reconnect() {
   // Loop until we're reconnected
   Serial.println("In reconnect...");
@@ -302,6 +158,8 @@ void reconnect() {
     // Attempt to connect
     if(client.connect(CL, mqttUserName, mqttPassword)) {
       Serial.println("connected");
+      display.clearDisplay();
+      req_data();
       Serial.println('\n');
 
     } else {
@@ -309,7 +167,81 @@ void reconnect() {
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
+      display.setTextSize(1);
+      display.setCursor(2,24); display.print("Connecting to RMQ...");
+      display.display();
       delay(5000);
     }
   }
+}
+
+String httpGETRequest(const char* serverName) {
+  // Your IP address with path or Domain name with URL path 
+  http.begin(httpClient, serverName);
+  
+  // Send HTTP POST request
+  int httpResponseCode = http.GET();
+  String payload = "{}"; 
+  
+  if (httpResponseCode>0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    payload = http.getString();
+  }
+  else {
+    Serial.print("Error code: ");
+    Serial.println(httpResponseCode);
+  }
+  // Free resources
+  http.end();
+  return payload;
+}
+
+void setup_wifi() {
+  delay(10);
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    wifi_stat=0;
+    display.setTextSize(1);
+    display.setCursor(2,24); display.print("Connecting ...");
+    if (wifiIcon == LOW) {
+    display.drawBitmap(108, 2, wifi_icon, 16, 16, WHITE);
+    wifiIcon = HIGH;
+    } else {
+    display.drawBitmap(108, 2, wifi_icon, 16, 16, BLACK);
+    wifiIcon = LOW;
+    }
+    display.display();
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  wifi_stat=1;
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  display.clearDisplay();
+}
+
+String mac2String(byte ar[]) {
+  String s;
+  for (byte i = 0; i < 6; ++i)
+  {
+    char buf[3];
+    sprintf(buf, "%2X", ar[i]);
+    s += buf;
+    if (i < 5) s += ':';
+  }
+  return s;
+}
+
+void printMACAddress() {
+  WiFi.macAddress(mac);
+  MACAddress = mac2String(mac);
+  Serial.println(MACAddress);
 }
