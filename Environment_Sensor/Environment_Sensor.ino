@@ -9,8 +9,19 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <DHT.h>
+
 #include "icon.h"
 #include "config.h"
+
+WiFiUDP ntpUDP;
+WiFiClient espClient;
+WiFiClient httpClient;
+HTTPClient http;
+PubSubClient client(espClient);
+NTPClient timeClient(ntpUDP, "asia.pool.ntp.org", utcOffsetInSeconds);
+
+DHT dht(DHTPIN, DHTTYPE);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 void setup () {
   Serial.begin(115200);
@@ -18,10 +29,10 @@ void setup () {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); 
   }
-  delay(2000);
-  display.clearDisplay();
+  delay(1000);
   timeClient.begin();
   dht.begin();
+  display.clearDisplay();
   display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(24,20);  display.println(F("Welcome"));
@@ -36,64 +47,50 @@ void setup () {
   client.setServer(mqttHost, 1883);
   delay(1000);
 }
+
 void loop() {
-   if (!client.connected()) {
+  if (!client.connected()) {
     reconnect();
-    }
-   client.loop();
-   float dataSuhu;
-   dataSuhu = dht.readTemperature();
-   Serial.println(dataSuhu);
-   String convertDataSuhu = String(dataSuhu);
-   String dataRMQ = String(String(guid) + "#" + dataSuhu );
-   char dataToMQTT[50];
-   dataRMQ.toCharArray(dataToMQTT, sizeof(dataToMQTT)); 
-   Serial.println("Ini Data untuk ke MQTT: ");
-   Serial.println(dataToMQTT);
-   client.publish(mqttQueue,dataToMQTT);
-   delay(1000);
-    
-   unsigned long currentMillis_1 = millis();
-   DisplayUpdate();
-   
+  }
+  client.loop();
+  kirimRMQ();
+  delay(1000);
+  unsigned long currentMillis_1 = millis();
+  DisplayUpdate();
   if (currentMillis_1 - previousMillis_1 >= interval_1) {
-    previousMillis_1 = currentMillis_1; 
-    req_data();
+  previousMillis_1 = currentMillis_1; 
+  req_data();
   } 
 }
 
 void req_data(){
   if (WiFi.status() == WL_CONNECTED) {
-      jsonBuffer = httpGETRequest(serverPath.c_str());
-      JSONVar myObject = JSON.parse(jsonBuffer);
-  
-      if (JSON.typeof(myObject) == "undefined") {
-        Serial.println("Parsing input failed!");
-        return;
-      }
-    
-      main_temp = JSON.stringify(myObject["main"]["temp"]);
-      String weather1 = JSON.stringify(myObject["weather"][0]["main"]);
-      weather = weather1.substring(1, weather1.length()-1);
-      String Icon1 = JSON.stringify(myObject["weather"][0]["icon"]);
-      Icon = Icon1.substring(1, Icon1.length()-1);
-    }else{
-      setup_wifi();
+    String jsonBuffer;
+    jsonBuffer = httpGETRequest(serverPath.c_str());
+    JSONVar myObject = JSON.parse(jsonBuffer);
+    if (JSON.typeof(myObject) == "undefined") {
+      Serial.println("Parsing input failed!");
+      return;
     }
+    main_temp = JSON.stringify(myObject["main"]["temp"]);
+    String weather1 = JSON.stringify(myObject["weather"][0]["main"]);
+    weather = weather1.substring(1, weather1.length()-1);
+    String Icon1 = JSON.stringify(myObject["weather"][0]["icon"]);
+    Icon = Icon1.substring(1, Icon1.length()-1);
+  }else{
+    setup_wifi();
+  }
 } 
 
 void DisplayUpdate(){
-  int x_cursor;
-  int TextSize;
-  char buff[20];
   display.clearDisplay(); 
    if (WiFi.status() != WL_CONNECTED){
-      setup_wifi();
+      display.drawBitmap(112, 1, wifi_icon, 16, 16, BLACK);
     }else{
       float dataAnalog;
       dataAnalog = dht.readTemperature();
       timeClient.update();
-      display.drawBitmap(106, 2, wifi_icon, 16, 16, WHITE);
+      display.drawBitmap(112, 1, wifi_icon, 16, 16, WHITE);
       display.setTextColor(WHITE);
       display.setTextSize(1);
       //display.setCursor(80,40);display.print(humNow); display.println(" %");
@@ -102,9 +99,10 @@ void DisplayUpdate(){
       String cd = String(tanggal)+"/"+ String(bulan)+"/"+String(tahun)+" "+String(jam)+":"+String(menit);
       display.setCursor(0,2);display.println(cd);
       display.setTextSize(1);
-      display.setCursor(64,19); display.print(main_temp);display.println(" C");
+      display.setCursor(64,19); display.print(main_temp);display.println("'C");
       display.setTextSize(2);
-      display.setCursor(64,45); display.print(dataAnalog);display.println(" C");
+      display.setCursor(62,45); display.print(dataAnalog,1);display.setCursor(116,45);display.println("C");
+      display.setTextSize(1);display.setCursor(110,42);display.println("o");
       DisplayBitmap();
     }
     display.display();
@@ -166,7 +164,7 @@ void reconnect() {
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
+      display.clearDisplay();
       display.setTextSize(1);
       display.setCursor(2,24); display.print("Connecting to RMQ...");
       display.display();
@@ -176,13 +174,9 @@ void reconnect() {
 }
 
 String httpGETRequest(const char* serverName) {
-  // Your IP address with path or Domain name with URL path 
   http.begin(httpClient, serverName);
-  
-  // Send HTTP POST request
   int httpResponseCode = http.GET();
-  String payload = "{}"; 
-  
+  String payload = "{}";  
   if (httpResponseCode>0) {
     Serial.print("HTTP Response code: ");
     Serial.println(httpResponseCode);
@@ -192,14 +186,12 @@ String httpGETRequest(const char* serverName) {
     Serial.print("Error code: ");
     Serial.println(httpResponseCode);
   }
-  // Free resources
   http.end();
   return payload;
 }
 
 void setup_wifi() {
   delay(10);
-  // We start by connecting to a WiFi network
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
@@ -208,7 +200,7 @@ void setup_wifi() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
-    wifi_stat=0;
+    display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(2,24); display.print("Connecting ...");
     if (wifiIcon == LOW) {
@@ -222,7 +214,6 @@ void setup_wifi() {
   }
   Serial.println("");
   Serial.println("WiFi connected");
-  wifi_stat=1;
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
   display.clearDisplay();
@@ -244,4 +235,18 @@ void printMACAddress() {
   WiFi.macAddress(mac);
   MACAddress = mac2String(mac);
   Serial.println(MACAddress);
+}
+
+void kirimRMQ() {
+   float dataSuhu;
+   dataSuhu = dht.readTemperature();
+   Serial.println(dataSuhu);
+   String convertdatasuhu = String(dataSuhu);
+   String convertguid = String(guid);
+   String dataRMQ = convertguid + "#" + convertdatasuhu;
+   char dataToMQTT[50];
+   dataRMQ.toCharArray(dataToMQTT, sizeof(dataToMQTT)); 
+   Serial.println("Ini Data untuk ke MQTT: ");
+   Serial.println(dataToMQTT);
+   client.publish(mqttQueue,dataToMQTT);
 }
